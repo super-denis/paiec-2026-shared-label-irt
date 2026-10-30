@@ -2,6 +2,7 @@
 
 Entry to the NeurIPS 2026 Predictive AI Evaluation Competition (Stanford AIMS, Codabench).
 The final submission is `submissions/v4_stacked` (`model.py` + `stack_model.json`).
+Selected Codabench submission: ID 1019684 (`stacked_v4_final.zip`). Codabench feedback scores are very noisy (the same file scored 0.153 to 0.195 for v3 and 0.175 to 0.200 for v4), so the scores quoted below are for transparency only; the model was chosen on the offline simulation described in the report.
 The technical report is in `report/` (NeurIPS template).
 
 ## Method in one paragraph

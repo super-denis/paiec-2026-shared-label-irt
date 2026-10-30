@@ -1,5 +1,5 @@
 \documentclass{article}
-\usepackage[final]{neurips_2026}
+\usepackage[main,preprint]{neurips_2026}
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
 \usepackage{hyperref}
@@ -33,6 +33,8 @@ A predictor implements \texttt{predict(input, labeled)} and receives a subject (
 \]
 averaged over pairs, lower being better. Predicting $0.5$ always gives $0.25$. The competition rules state that \texttt{labeled} contains \texttt{[[subject, item], label]} entries gathered across the sampled subject--benchmark pairs, that is, labels of other subjects and benchmarks are visible to the predictor. This observation drives our whole approach: the labels of other subjects on the same benchmark are informative about item difficulty, which a predictor that sees only its own pair cannot learn.
 
+\paragraph{Related work.} Work on efficient evaluation of language models mostly estimates the aggregate performance or the ability of a model from a small number of items. tinyBenchmarks \citep{polo2024tiny} selects representative items and combines item response theory with the observed accuracy, ATLAS \citep{li2025atlas} chooses items adaptively with item information, and \citet{krumdick2026wild} pair a multidimensional item response model with adaptive item selection to estimate abilities across benchmarks. \citet{park2025anticipatory} predict benchmark scores from written descriptions, before any experiment is run. These works target aggregate scores, whereas the competition scores calibrated item-level probabilities with the Brier score, with labels of other subjects on the same benchmark available at test time. We are not aware of earlier work that evaluates this setting, but we did not run a systematic search, and the shared-label model below applies standard item response theory to it rather than introducing a new one.
+
 \section{Data and validation protocol}
 \label{sec:data}
 \paragraph{Training data.} We use only the public \texttt{measurement-db} collection (Hugging Face dataset \texttt{aims-foundations/\allowbreak measurement-db}). We kept every benchmark whose responses are all in $\{0,1\}$ (170 benchmarks, 69.2 million response rows) and discarded non-binary ones. No other training data was used, and the submitted model does not call any external model or service.
@@ -43,7 +45,7 @@ averaged over pairs, lower being better. Predicting $0.5$ always gives $0.25$. T
 \label{sec:methods}
 We built four successive versions. All are pure Python without third-party packages and predict $0.5$ when no label of the benchmark is available.
 
-\paragraph{v1: per-pair shrinkage.} With $k$ successes among the $n$ revealed labels of the target subject on the target benchmark, $\hat p=(k+1)/(n+2)$. Two refinements (a prior from the subject's name, and tuning of the strength per budget by leave-benchmark-out cross-validation) did not improve on this and were disabled in the submitted parameters.
+\paragraph{v1: per-pair shrinkage.} With $k$ successes among the $n$ revealed labels of the target subject on the target benchmark, $\hat p=(k+1)/(n+2)$, a shrinkage estimator in the spirit of \citet{efron1973stein}. Two refinements (a prior from the subject's name, and tuning of the strength per budget by leave-benchmark-out cross-validation) did not improve on this and were disabled in the submitted parameters.
 
 \paragraph{v2: shared-label item response model.} Following the Rasch model \citep{rasch1960}, for the benchmark of the query, we collect every revealed label of that benchmark, whatever the subject, and fit
 \[
@@ -57,7 +59,7 @@ where $s$ indexes subjects and $j$ items. The posterior mode is computed by cycl
 \]
 and similarly for $\tau_d$, where $h$ is the diagonal posterior precision (24 sweeps in total). This is the usual EM update for a normal prior scale (see \citealp{efron1973stein}). On the simulation the estimated scales were about $0.7$--$0.9$ for subjects and $1.0$--$1.3$ for items.
 
-\paragraph{v4: learned second stage.} The item response model is parametric and can be systematically miscalibrated: it ignores the discrimination of items, it treats the difficulty of an unlabelled item as exactly zero, and it does not know how reliable a fit is. We therefore train a second stage that maps the stage-one output and a few diagnostics to a corrected probability, in the spirit of the combined estimators of \citet{polo2024tiny}. For each query it uses 20 features computed from the fit: the logit $\eta$ and its two parts $c+a_s$ and $d_j$; whether the item has a revealed label (from any subject) and how many; the posterior variances of $a_s$ and $d_j$ (the prior variance $\tau_d^2$ for an unlabelled item); the number of labels of the target subject and its smoothed success rate; the number of visible subjects and the mean number of labels per subject; the base rate of the benchmark; the two estimated prior scales; the shrunk empirical success rate of the item; and five first-order two-parameter-logistic signals, namely one Newton step for an item slope and for a subject slope, their products with $a_s$ and $d_j$, and the mean residual of the item (Appendix~\ref{app:impl}). The learner is a gradient-boosted regression-tree ensemble with squared-error loss, hence directly the Brier score (120 trees, depth 4, at least 200 rows per leaf, $\ell_2$ penalty 1; no tuning). It is trained on 3.36 million rows from the simulator of Section~\ref{sec:data} (every benchmark, $S\in\{10,30,100,\text{all}\}$, budgets 1 to 31, 40 evaluation items per pair) and exported as a 170~kB JSON file that the pure-Python \texttt{model.py} evaluates. The prediction at budget 0, or for a subject without any label on the benchmark, is the stage-one probability.
+\paragraph{v4: learned second stage.} The item response model is parametric and can be systematically miscalibrated: it ignores the discrimination of items, it treats the difficulty of an unlabelled item as exactly zero, and it does not know how reliable a fit is. We therefore train a second stage that maps the stage-one output and a few diagnostics to a corrected probability, in the spirit of the combined estimators of \citet{polo2024tiny}. For each query it uses 20 features computed from the fit: the logit $\eta$ and its two parts $c+a_s$ and $d_j$; whether the item has a revealed label (from any subject) and how many; the posterior variances of $a_s$ and $d_j$ (the prior variance $\tau_d^2$ for an unlabelled item); the number of labels of the target subject and its smoothed success rate; the number of visible subjects and the mean number of labels per subject; the base rate of the benchmark; the two estimated prior scales; the shrunk empirical success rate of the item; and five first-order two-parameter-logistic signals, namely one Newton step for an item slope and for a subject slope, their products with $a_s$ and $d_j$, and the mean residual of the item (Appendix~\ref{app:impl}). The learner is a gradient-boosted regression-tree ensemble \citep{friedman2001greedy} with squared-error loss, hence directly the Brier score (120 trees, depth 4, at least 200 rows per leaf, $\ell_2$ penalty 1; no tuning), implemented with scikit-learn \citep{pedregosa2011scikit}. It is trained on 3.36 million rows from the simulator of Section~\ref{sec:data} (every benchmark, $S\in\{10,30,100,\text{all}\}$, budgets 1 to 31, 40 evaluation items per pair) and exported as a 170~kB JSON file that the pure-Python \texttt{model.py} evaluates. The prediction at budget 0, or for a subject without any label on the benchmark, is the stage-one probability.
 
 \paragraph{Label acquisition.} We submit no \texttt{labeling.py}, so the evaluator's default random policy is used (Section~\ref{sec:negative}).
 
@@ -204,7 +206,7 @@ Constant for zero labels, $0.55$ instead of $0.5$ & \multicolumn{2}{c}{$-0.00015
 \paragraph{LLM assistance.} The code, the simulation and a first draft of this report were produced with the help of an LLM coding assistant (Claude, Anthropic) used through Claude Code, under the author's direction. The author ran all Kaggle experiments, submitted to Codabench and is responsible for the content.
 
 \bibliographystyle{plainnat}
-\begin{thebibliography}{9}
+\begin{thebibliography}{10}
 \bibitem[Brier(1950)]{brier1950}
 G.~W. Brier.
 \newblock Verification of forecasts expressed in terms of probability.
@@ -215,10 +217,35 @@ B.~Efron and C.~Morris.
 \newblock Stein's estimation rule and its competitors: an empirical Bayes approach.
 \newblock \emph{Journal of the American Statistical Association}, 68(341):117--130, 1973.
 
-\bibitem[Polo et~al.(2024)]{polo2024tiny}
-F.~M. Polo, L.~Weber, L.~Choshen, Y.~Sun, G.~Xu, and M.~Yurochkin.
+\bibitem[Friedman(2001)]{friedman2001greedy}
+J.~H. Friedman.
+\newblock Greedy function approximation: a gradient boosting machine.
+\newblock \emph{Annals of Statistics}, 29(5):1189--1232, 2001.
+
+\bibitem[Krumdick et~al.(2026)]{krumdick2026wild}
+M.~Krumdick, A.~Wiemerslage, S.~Ebner, C.~Lovering, and C.~Tanner.
+\newblock Cost-efficient estimation of general abilities across benchmarks.
+\newblock \emph{arXiv:2604.01418}, 2026.
+
+\bibitem[Li et~al.(2025)]{li2025atlas}
+P.~Li, X.~Tang, S.~Chen, Y.~Cheng, R.~Metoyer, T.~Hua, and N.~V. Chawla.
+\newblock Adaptive testing for {LLM} evaluation: a psychometric alternative to static benchmarks.
+\newblock \emph{arXiv:2511.04689}, 2025.
+
+\bibitem[Park et~al.(2025)]{park2025anticipatory}
+J.~Park, E.~Mendes, G.~Stanovsky, and A.~Ritter.
+\newblock Anticipatory evaluation of language models: predicting {LLM} benchmark scores from descriptions.
+\newblock \emph{arXiv:2509.20645}, 2025.
+
+\bibitem[Pedregosa et~al.(2011)]{pedregosa2011scikit}
+F.~Pedregosa et~al.
+\newblock Scikit-learn: machine learning in {Python}.
+\newblock \emph{Journal of Machine Learning Research}, 12:2825--2830, 2011.
+
+\bibitem[Maia~Polo et~al.(2024)]{polo2024tiny}
+F.~Maia~Polo, L.~Weber, L.~Choshen, Y.~Sun, G.~Xu, and M.~Yurochkin.
 \newblock tinyBenchmarks: evaluating {LLMs} with fewer examples.
-\newblock In \emph{International Conference on Machine Learning}, 2024.
+\newblock In \emph{Proceedings of the 41st International Conference on Machine Learning}, volume 235 of \emph{PMLR}, pages 34303--34326, 2024.
 
 \bibitem[Rasch(1960)]{rasch1960}
 G.~Rasch.
@@ -232,6 +259,8 @@ L.~Wang, N.~Yang, X.~Huang, L.~Yang, R.~Majumder, and F.~Wei.
 \end{thebibliography}
 
 \appendix
+\newpage
+\section*{Appendices}
 \section{Implementation details}
 \label{app:impl}
 The model for one benchmark is fitted by repeating, for 24 sweeps (20 in v2), the Newton updates
